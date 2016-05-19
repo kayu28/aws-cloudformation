@@ -96,7 +96,6 @@
     },
     "WASProfileAdminUserName" : {
       "Description" : "The user ID that is used for administrative security",
-      "NoEcho": "true",
       "Type" : "String",
       "Default" : "wasadmin"
     },
@@ -117,6 +116,11 @@
       "Type" : "String",
       "Default" : "wasadmin"
     },
+    "WASDataSourceName" : {
+      "Type" : "String",
+      "MinLength" : "1",
+      "Default" : "db2-ds"
+    },
     "DB2DriverUrl" : {
       "Type" : "String",
       "MinLength" : "1"
@@ -129,6 +133,11 @@
       "NoEcho": "true",
       "Type" : "String",
       "Default" : "db2inst1"
+    },
+    "DB2DatabaseName" : {
+      "Type" : "String",
+      "MinLength" : "1",
+      "Default" : "testdb"
     },
     "DB2GitRepository" : {
       "Type" : "String",
@@ -156,11 +165,11 @@
           "Label" : { "default" : "WebSphere Application Server Configuration" },
           "Parameters" : [ "WASGitRepository",
               "WASInstallerUrl", "WASProfileName", "WASCellName", "WASNodeName", "WASServerName", "WASEnableAdminSecurity",
-              "WASProfileAdminUserName", "WASProfileAdminPassword", "WASAdminUserName", "WASAdminPassword" ]
+              "WASProfileAdminUserName", "WASProfileAdminPassword", "WASAdminUserName", "WASAdminPassword", "WASDataSourceName", "DB2DriverUrl"]
         },
         {
           "Label" : { "default" : "DB2 Configuration" },
-          "Parameters" : [ "DB2DriverUrl", "DB2InstallerUrl", "DB2GitRepository", "DB2User", "DB2Password" ]
+          "Parameters" : [ "DB2InstallerUrl", "DB2GitRepository", "DB2User", "DB2Password", "DB2DatabaseName" ]
         }
       ],
       "ParameterLabels" : {
@@ -175,9 +184,11 @@
         "WASProfileAdminPassword" : { "default" : "Admin console password" },
         "WASAdminUserName"        : { "default" : "Admin user name" },
         "WASAdminPassword"        : { "default" : "Admin password" },
+        "WASDataSourceName"       : { "default" : "DataSource name" },
         "DB2DriverUrl"            : { "default" : "JDBC Driver URL" },
-        "DB2User"                 : { "default" : "User name" },
-        "DB2Password"             : { "default" : "Password" },
+        "DB2User"                 : { "default" : "Instance User name" },
+        "DB2Password"             : { "default" : "Instance Password" },
+        "DB2DatabaseName"         : { "default" : "Database name" },
         "DB2GitRepository"        : { "default" : "Chef Cookbook URL" },
         "DB2InstallerUrl"         : { "default" : "Installer URL" }
       }
@@ -257,7 +268,7 @@
     },
     "ApServerInstance" : {
       "Type" : "AWS::EC2::Instance",
-
+      "DependsOn" : "AttachGateway",
       "Metadata" : {
         "AWS::CloudFormation::Init" : {
           "configSets" : {
@@ -389,7 +400,6 @@
               "/var/chef/chef-repo/cookbooks/chef-wasdev/attributes/normal.rb" : {
                 "content": { "Fn::Join": [ "", [
                   "normal['was']['installer_url']                  = '", {"Ref" : "WASInstallerUrl"}, "'\n",
-                  "normal['was']['db2driver_url']                  = '", {"Ref" : "DB2DriverUrl"}, "'\n",
                   "normal['was']['ibmuser']                        = '", {"Ref" : "IBMUser"}, "'\n",
                   "normal['was']['ibmpassword']                    = '", {"Ref" : "IBMPassword"}, "'\n",
                   "normal['was']['profile']['profileName']         = '", {"Ref" : "WASProfileName"}, "'\n",
@@ -401,15 +411,13 @@
                   "normal['was']['profile']['adminPassword']       = '", {"Ref" : "WASProfileAdminPassword"}, "'\n",
                   "normal['was']['admin']['username']              = '", {"Ref" : "WASAdminUserName"}, "'\n",
                   "normal['was']['admin']['password']              = '", {"Ref" : "WASAdminPassword"}, "'\n",
-                  "normal['was']['auth']['alias']                  = 'DB2AUTH'\n",
+                  "normal['was']['provider']['db2driver_url']      = '", {"Ref" : "DB2DriverUrl"}, "'\n",
                   "normal['was']['auth']['dbuser']                 = '", {"Ref" : "DB2User"}, "'\n",
                   "normal['was']['auth']['dbpassword']             = '", {"Ref" : "DB2Password"}, "'\n",
-                  "normal['was']['provider']['name']               = 'jdbcProvider'\n",
-                  "normal['was']['datasource']['name']             = 'SYADB1'\n",
-                  "normal['was']['datasource']['jndi']             = 'jdbc/SYADB1'\n",
-                  "normal['was']['datasource']['database']         = 'sample'\n",
+                  "normal['was']['datasource']['name']             = '", {"Ref" : "WASDataSourceName"}, "'\n",
+                  "normal['was']['datasource']['jndi']             = 'jdbc/", {"Ref" : "WASDataSourceName"}, "'\n",
+                  "normal['was']['datasource']['database']         = '", {"Ref" : "DB2DatabaseName"}, "'\n",
                   "normal['was']['datasource']['hostname']         = '", {"Ref" : "DBServerPrivateIpAddress"}, "'\n",
-                  "normal['was']['datasource']['port']             = '50000'\n",
                   "normal['was']['datasource']['schema']           = '", {"Ref" : "DB2User"}, "'\n"
                 ]]},
                 "mode"  : "000400",
@@ -443,7 +451,7 @@
                 "env" : { "HOME" : "/var/chef" }
               },
               "06_configure_node_run_list" : {
-                "command" : "knife node run_list add -z `knife node list -z` recipe[was::aws-default]",
+                "command" : "knife node run_list add -z `knife node list -z` recipe[was::default]",
                 "cwd" : "/var/chef/chef-repo",
                 "env" : { "HOME" : "/var/chef" }
               }
@@ -495,13 +503,9 @@
         "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
              "#!/bin/bash -xe\n",
 
-             "alias cp > /dev/null 2>&1 && unalias cp\n",
-             "cp -p -f /usr/share/zoneinfo/Asia/Tokyo /etc/localtime\n",
-             "alias cp='cp -i'\n",
-             "service crond restart\n",
-
              "yum -y update\n",
              "yum -y install vim\n",
+             "ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime\n",
 
              "# Install AWS CloudFormation helper scripts\n",
              "curl -kL https://bootstrap.pypa.io/get-pip.py | python\n",
@@ -537,7 +541,7 @@
 
     "DBServerInstance" : {
       "Type" : "AWS::EC2::Instance",
-
+      "DependsOn" : "AttachGateway",
       "Metadata" : {
         "AWS::CloudFormation::Init" : {
           "configSets" : {
@@ -667,7 +671,10 @@
               },
               "/var/chef/chef-repo/cookbooks/chef-db2/attributes/normal.rb" : {
                 "content": { "Fn::Join": [ "", [
-                  "normal['db2']['installer_url'] = '", {"Ref" : "DB2InstallerUrl"}, "'\n"
+                  "normal['db2']['installer_url']         = '", {"Ref" : "DB2InstallerUrl"}, "'\n",
+                  "normal['db2']['instance']['name']      = '", {"Ref" : "DB2User"}, "'\n",
+                  "normal['db2']['instance']['password']  = '", {"Ref" : "DB2Password"}, "'\n",
+                  "normal['db2']['database']['name']      = '", {"Ref" : "DB2DatabaseName"}, "'\n"
                 ]]},
                 "mode"  : "000400",
                 "owner" : "root",
@@ -706,7 +713,7 @@
           "run_chef" : {
             "commands" : {
               "01_run_chef_client" : {
-                "command" : "chef-client -z -c /var/chef/chef-repo/.chef/client.rb",
+                "command" : "chef-client -z -c /var/chef/chef-repo/.chef/client.rb | tee /tmp/chef-client-output.log",
                 "cwd" : "/var/chef/chef-repo",
                 "env" : { "HOME" : "/var/chef" }
               }
@@ -740,13 +747,9 @@
         "UserData" : { "Fn::Base64" : { "Fn::Join" : ["", [
              "#!/bin/bash -xe\n",
 
-             "alias cp > /dev/null 2>&1 && unalias cp\n",
-             "cp -p -f /usr/share/zoneinfo/Asia/Tokyo /etc/localtime\n",
-             "alias cp='cp -i'\n",
-             "service crond restart\n",
-
              "yum -y update\n",
              "yum -y install vim\n",
+             "ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime\n",
 
              "# Install AWS CloudFormation helper scripts\n",
              "curl -kL https://bootstrap.pypa.io/get-pip.py | python\n",
@@ -754,12 +757,6 @@
              "cp -f `pip show aws-cfn-bootstrap 2>/dev/null | grep -E \"^Location\" | awk -F: '{print $2}'`/init/redhat/cfn-hup /etc/init.d/\n",
              "chmod 755 /etc/init.d/cfn-hup\n",
              "chkconfig --add cfn-hup\n",
-
-             "# Change the system hostname to a public DNS name\n",
-             "echo preserve_hostname: true >> /etc/cloud/cloud.cfg\n",
-             "IPV4=`/usr/bin/curl -s http://169.254.169.254/latest/meta-data/public-ipv4`\n",
-             "HOSTNAME='ec2-'`echo $IPV4 | sed -e 's/\\./-/g'`.", { "Ref" : "AWS::Region" }, "'.compute.amazonaws.com'\n",
-             "hostnamectl set-hostname $HOSTNAME\n",
 
              "function error_exit\n",
              "{\n",
@@ -828,21 +825,33 @@
   },
 
   "Outputs" : {
-    "InstanceId" : {
-      "Description" : "InstanceId of the newly created EC2 instance",
+    "ApServerInstanceId" : {
+      "Description" : "InstanceId of Websphere Application Server",
       "Value" : { "Ref" : "ApServerInstance" }
     },
-    "AZ" : {
-      "Description" : "Availability Zone of the newly created EC2 instance",
-      "Value" : { "Fn::GetAtt" : [ "ApServerInstance", "AvailabilityZone" ] }
-    },
-    "PublicDNS" : {
-      "Description" : "Public DNSName of the newly created EC2 instance",
+    "ApServerPublicDNS" : {
+      "Description" : "Public DNSName of Websphere Application Server",
       "Value" : { "Fn::GetAtt" : [ "ApServerInstance", "PublicDnsName" ] }
     },
-    "PublicIP" : {
-      "Description" : "Public IP address of the newly created EC2 instance",
+    "ApServerPublicIP" : {
+      "Description" : "Public IP address of Websphere Application Server",
       "Value" : { "Fn::GetAtt" : [ "ApServerInstance", "PublicIp" ] }
+    },
+    "AdministrativeConsoleURL" : {
+      "Description" : "Websphere Application Server Administrative Console",
+      "Value" : { "Fn::Join" : ["", ["https://", { "Fn::GetAtt" : [ "ApServerInstance", "PublicIp" ]}, ":9043/ibm/console" ]] }
+    },
+    "DBServerInstanceId" : {
+      "Description" : "InstanceId of DB2",
+      "Value" : { "Ref" : "DBServerInstance" }
+    },
+    "DBServerPublicDNS" : {
+      "Description" : "Public DNSName of DB2",
+      "Value" : { "Fn::GetAtt" : [ "DBServerInstance", "PublicDnsName" ] }
+    },
+    "DBServerPublicIP" : {
+      "Description" : "Public IP address of DB2",
+      "Value" : { "Fn::GetAtt" : [ "DBServerInstance", "PublicIp" ] }
     }
   }
 }
