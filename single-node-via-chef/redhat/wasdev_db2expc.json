@@ -142,7 +142,7 @@
     "DB2GitRepository" : {
       "Type" : "String",
       "MinLength" : "1",
-      "Default" : "https://github.com/kayu28/chef-db2.git"
+      "Default" : "https://github.com/kayu28/chef-db2expc.git"
     },
     "DB2InstallerUrl" : {
       "Type" : "String",
@@ -484,7 +484,7 @@
         "Tags": [
             {
                 "Key": "Name",
-                "Value": "WebSphere Application Server for Developers"
+                "Value" : { "Fn::Join" : [ " - ", [ { "Ref" : "AWS::StackName" }, "WebSphere Application Server for Developers"] ] }
             },
             {
                 "Key": "Application",
@@ -504,7 +504,6 @@
              "#!/bin/bash -xe\n",
 
              "yum -y update\n",
-             "yum -y install vim\n",
              "ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime\n",
 
              "# Install AWS CloudFormation helper scripts\n",
@@ -728,7 +727,7 @@
         "Tags": [
             {
                 "Key": "Name",
-                "Value": "DB2 Express-C"
+                "Value" : { "Fn::Join" : [ " - ", [ { "Ref" : "AWS::StackName" }, "DB2 Express-C"] ] }
             },
             {
                 "Key": "Application",
@@ -748,7 +747,6 @@
              "#!/bin/bash -xe\n",
 
              "yum -y update\n",
-             "yum -y install vim\n",
              "ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime\n",
 
              "# Install AWS CloudFormation helper scripts\n",
