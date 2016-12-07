@@ -14,6 +14,10 @@ Parameters:
     ConstraintDescription: must be the VPC Id of an existing Virtual Private Cloud
     Description: VpcId of your existing Virtual Private Cloud (VPC)
     Type: AWS::EC2::VPC::Id
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    ConstraintDescription: ''
+    Description: The name of the Availability Zone where the DB instance is located
   SubnetIDs:
     Description: The list of SubnetIds in your Virtual Private Cloud (VPC)
     Type: List<AWS::EC2::Subnet::Id>
@@ -49,8 +53,15 @@ Parameters:
     Default: db.t2.micro
     Description: The database instance type
     Type: String
+  InstanceName:
+    Description: The database instance name
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[a-zA-Z][-a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
   StorageType:
-    Description: Specifies the storage type to be associated with the DB instance
+    Description: The storage type to be associated with the DB instance
     Default: gp2
     Type: String
     AllowedValues:
@@ -95,6 +106,7 @@ Parameters:
     - 5.7
   MultiAZ:
     Type: String
+    Description: Specifies if the database instance is a multiple Availability Zone deployment
     Default: false
     AllowedValues:
     - true
@@ -102,18 +114,22 @@ Parameters:
     ConstraintDescription: must be either true or false.
   PubliclyAccessible:
     Type: String
+    Description: Indicates whether the DB instance is an Internet-facing instance
     Default: false
     AllowedValues:
     - true
     - false
   PreferredBackupWindow:
     Type: String
+    Description: The daily time range during which automated backups are performed
     Default: 05:00-06:00
   PreferredMaintenanceWindow:
     Type: String
+    Description: The weekly time range (in UTC) during which system maintenance can occur
     Default: sun:19:00-sun:20:00
   StorageEncrypted:
     Type: String
+    Description: Indicates whether the DB instance is encrypted
     Default: false
     AllowedValues:
     - true
@@ -125,21 +141,26 @@ Parameters:
     MinValue: 0
   InnodbLockWaitTimeout:
     Type: Number
+    Description: The length of time in seconds an InnoDB transaction waits for a row lock before giving up
     Default: 10
   InnodbMaxDirtyPagesPct:
     Type: Number
     Default: 90
   MaxHeapTableSize:
     Type: Number
+    Description: The maximum size of memory tables
     Default: 33554432
   TmpTableSize:
     Type: Number
+    Description: The maximum size of internal in-memory temporary tables
     Default: 33554432
   ThreadCacheSize:
     Type: Number
+    Description: How many threads the server should cache for reuse
     Default: 32
   LcTimeNames:
     Type: String
+    Description: The locale that controls the language used to display day and month names and abbreviations
     Default: en_US
     AllowedValues:
     - de_DE
@@ -160,6 +181,7 @@ Parameters:
     - cp932
   CollationServer:
     Type: String
+    Description: The server's default collation
     MinLength: '1'
     Default: utf8_general_ci
 Metadata:
@@ -170,10 +192,12 @@ Metadata:
       Parameters:
       - Namespace
       - VpcId
+      - AvailabilityZone
       - SubnetIDs
       - MultiAZ
       - PubliclyAccessible
       - InstanceType
+      - InstanceName
       - DBAllocatedStorage
       - StorageType
       - DBName
@@ -262,13 +286,9 @@ Resources:
     Type: AWS::RDS::DBInstance
     Properties:
       AllocatedStorage: !Ref DBAllocatedStorage
-      AvailabilityZone: ap-northeast-1a
+      AvailabilityZone: !Ref AvailabilityZone
       BackupRetentionPeriod: !Ref BackupRetentionPeriod
-      DBInstanceIdentifier:
-        Fn::Join:
-        - '-'
-        - - Ref: Namespace
-          - 'mysql'
+      DBInstanceIdentifier: !Ref InstanceName
       DBInstanceClass: !Ref InstanceType
       DBName: !Ref DBName
       DBParameterGroupName: !Ref DBParamGroup
@@ -292,17 +312,9 @@ Resources:
         Value: !Ref AWS::StackId
 Outputs:
   JDBCConnectionString:
-    Description: JDBC connection string for database
-    Value:
-      Fn::Join:
-      - ''
-      - - jdbc:mysql://
-        - Fn::GetAtt:
-          - DBInstance
-          - Endpoint.Address
-        - ':'
-        - Fn::GetAtt:
-          - DBInstance
-          - Endpoint.Port
-        - /
-        - Ref: DBName
+    Description: JDBC connection string for the database
+    Value: !Join ['', ['jdbc:mysql://', !GetAtt [DBInstance, Endpoint.Address], ':', !GetAtt [
+          DBInstance, Endpoint.Port], /, !Ref 'DBName']]
+  Endpoint:
+    Description: Database endpoint address
+    Value: !GetAtt [DBInstance, Endpoint.Address]
