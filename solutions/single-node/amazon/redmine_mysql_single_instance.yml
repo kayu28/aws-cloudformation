@@ -1,5 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'AWS CloudFormation Template redmine_single_instance: This template installs Redmine on a Amazon Linux instance.'
+Metadata: 
+  License: Apache-2.0
+Description: >
+    AWS CloudFormation Template redmine_mysql_single_instance:
+    This template installs Redmine on a Amazon Linux 2016.03 instance.
 Parameters:
   InstanceType:
     AllowedValues:
@@ -62,9 +66,9 @@ Parameters:
     Description: redmine server EC2 instance type
     Type: String
   KeyName:
-    ConstraintDescription: must be the name of an existing EC2 KeyPair.
     Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
     Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
   PrivateIpAddress:
     AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})
     ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
@@ -92,7 +96,7 @@ Parameters:
     MinLength: '1'
     MaxLength: '64'
     AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
-    Default: redmine
+    Default: redminedb
     ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
   DBUser:
     Description: Username for MySQL database access
@@ -132,7 +136,7 @@ Parameters:
     Description: Ruby version
     Type: String
     MinLength: '1'
-    Default: 2.3.1
+    Default: 2.3.2
   RbenvRoot:
     Description: rbenv base directory
     Type: String
@@ -147,6 +151,15 @@ Parameters:
     Type: String
     MinLength: '1'
     Default: redmine
+  PsgrAppEnv:
+    Type: String
+    AllowedValues:
+    - "production"
+    - "development"
+    Default: "production"
+  PsgrLogLevel:
+    Type: Number
+    Default: 3
   PsgrMaxPoolSize:
     Type: String
     MinLength: '1'
@@ -203,6 +216,8 @@ Metadata:
       Parameters:
       - RedmineVersion
       - RedminePrefix
+      - PsgrAppEnv
+      - PsgrLogLevel
       - PsgrMaxPoolSize
       - PsgrMaxInstancesPerApp
       - PsgrPoolIdleTime
@@ -374,12 +389,19 @@ Mappings:
       PV64: ami-7f77b31f
 Resources:
   CloudFormationLogs:
+    Type: AWS::Logs::LogGroup
     Properties:
       RetentionInDays: 365
-    Type: AWS::Logs::LogGroup
+      LogGroupName:
+        Fn::Join:
+        - '-'
+        - - Ref: AWS::StackName
+          - CloudFormationLogs
   Ec2Role:
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
+        Version: '2012-10-17'
         Statement:
         - Action:
           - sts:AssumeRole
@@ -387,40 +409,38 @@ Resources:
           Principal:
             Service:
             - ec2.amazonaws.com
-        Version: '2012-10-17'
       ManagedPolicyArns:
       - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
       Path: /
       Policies:
-      - PolicyDocument:
+      - PolicyName: s3
+        PolicyDocument:
           Statement:
           - Action:
             - s3:*
             Effect: Allow
             Resource: '*'
           Version: '2012-10-17'
-        PolicyName: s3
-      - PolicyDocument:
+      - PolicyName: logs
+        PolicyDocument:
           Statement:
           - Action:
             - logs:*
             Effect: Allow
             Resource: arn:aws:logs:*:*:*
           Version: '2012-10-17'
-        PolicyName: logs
-    Type: AWS::IAM::Role
   Ec2RoleInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
     Properties:
       Path: /
       Roles:
       - Ref: Ec2Role
-    Type: AWS::IAM::InstanceProfile
   RedmineSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: redmine server Security group
       SecurityGroupIngress:
-      - CidrIp:
-          Ref: SSHLocation
+      - CidrIp: !Ref SSHLocation
         FromPort: '22'
         IpProtocol: tcp
         ToPort: '22'
@@ -432,8 +452,7 @@ Resources:
         FromPort: '443'
         IpProtocol: tcp
         ToPort: '443'
-      - CidrIp:
-          Ref: SSHLocation
+      - CidrIp: !Ref SSHLocation
         FromPort: '9418'
         IpProtocol: tcp
         ToPort: '9418'
@@ -443,24 +462,30 @@ Resources:
         ToPort: '-1'
       Tags:
       - Key: Name
-        Value: !Sub |
-          !Ref  "AWS::StackName" Redmine Security Group
+        Value:
+          Fn::Join:
+          - ' '
+          - - Ref: AWS::StackName
+            - 'Redmine Security Group'
       VpcId:
         Ref: VpcId
-    Type: AWS::EC2::SecurityGroup
   RedmineServerInstance:
+    Type: AWS::EC2::Instance
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
           default:
           - install_cfn
+          - make_swap
+          - install_package
           - install_mysql
           - configure_mysql
           - install_ruby
           - download_redmine
           - install_redmine
-          - install_httpd
-          - install_logs
+          - configure_httpd
+          - install_passenger
+          - configure_awslogs
         install_cfn:
           files:
             /etc/cfn/cfn-hup.conf:
@@ -489,16 +514,55 @@ Resources:
                 files:
                 - /etc/cfn/cfn-hup.conf
                 - /etc/cfn/hooks.d/cfn-auto-reloader.conf
-        install_mysql:
+        make_swap:
+          files:
+            /etc/rc.d/init.d/swap:
+              content: !Sub |
+                SWAPFILE=/mnt/swap.img
+                MEMSIZE=`cat /proc/meminfo | grep MemTotal | awk '{print $2}'`
+                if [ $MEMSIZE -lt 2097152 ]; then
+                  SIZE=$((MEMSIZE * 2))
+                elif [ $MEMSIZE -lt 8388608 ]; then
+                  SIZE=$MEMSIZE
+                elif [ $MEMSIZE -lt 67108864 ]; then
+                  SIZE=$((MEMSIZE / 2))
+                else
+                  SIZE=4194304
+                fi
+                FSTYPE=`df -T |grep /$ | grep xfs | wc -l`
+                if [ $FSTYPE -eq 1 ]; then
+                    # For XFS
+                    dd if=/dev/zero of=$SWAPFILE count=$SIZE bs=1K && mkswap $SWAPFILE && swapon $SWAPFILE
+                elif [ $FSTYPE -eq 0 ]; then
+                    # For EXT4
+                    fallocate -l "$SIZE"k $SWAPFILE && chmod 600 $SWAPFILE&& mkswap $SWAPFILE && swapon $SWAPFILE
+                fi
+              owner: root
+              group: root
+              mode: '000755'
+          commands:
+            01_mkswap:
+              command: bash /etc/rc.d/init.d/swap
+        install_package:
           packages:
             yum:
-              mysql: []
-              mysql-server : []
-              mysql-devel  : []
+              httpd24           : []
+              httpd24-devel     : []
+              openssl-devel     : []
+              libcurl-devel     : []
+              readline-devel    : []
+              mysql             : []
+              mysql-server      : []
+              mysql-devel       : []
+              ImageMagick       : []
+              ImageMagick-devel : []
+              ipa-gothic-fonts  : []
+              awslogs           : []
+              amazon-ssm-agent  : []
+        install_mysql:
           files:
             /etc/my.cnf:
               content: !Sub |
-                # Server Section
                 [mysqld]
                 datadir=/var/lib/mysql
                 socket=/var/lib/mysql/mysql.sock
@@ -509,7 +573,6 @@ Resources:
                 log-error=/var/log/mysqld.log
                 pid-file=/var/run/mysqld/mysqld.pid
 
-                # Client Section
                 [mysql]
                 default-character-set=${DBClientCharSet}
               owner: root
@@ -544,9 +607,6 @@ Resources:
             03_delete_tmpfile:
               command: rm -f /tmp/setup.mysql
         install_ruby:
-          packages:
-            yum:
-              readline-devel : []
           files:
             /etc/profile.d/rbenv.sh:
               content: !Sub |
@@ -571,7 +631,7 @@ Resources:
                 RBENV_ROOT: !Ref RbenvRoot
             03_install_bundler:
               command: !Sub |
-                ${RbenvRoot}/shims/gem install bundler daemon_controller rack passenger --no-rdoc --no-ri
+                ${RbenvRoot}/shims/gem install bundler --no-rdoc --no-ri
                 eval "$(${RbenvRoot}/bin/rbenv init -)"
               env:
                 RBENV_ROOT: !Ref RbenvRoot
@@ -598,8 +658,8 @@ Resources:
                   username: ${DBUser}
                   password: "${DBPassword}"
                   encoding: utf8
-              owner: root
-              group: root
+              owner: apache
+              group: apache
               mode: '000644'
             /var/lib/redmine/config/configuration.yml:
               content: !Sub |
@@ -611,8 +671,23 @@ Resources:
                       port: 25
                       domain: "example.com"
                   rmagick_font_path: /usr/share/fonts/ipa-gothic/ipag.ttf
-              owner: root
-              group: root
+              owner: apache
+              group: apache
+              mode: '000644'
+            /var/lib/redmine/config/environments/production.rb:
+              content: !Sub |
+                Rails.application.configure do
+                  config.cache_classes = true
+                  config.eager_load = true
+                  config.consider_all_requests_local = false
+                  config.action_controller.perform_caching = true
+                  config.action_mailer.raise_delivery_errors = false
+                  config.action_mailer.logger = nil
+                  config.active_support.deprecation = :log
+                  config.log_level = :warn
+                end
+              owner: apache
+              group: apache
               mode: '000644'
           commands:
             01_mod_configuration:
@@ -658,12 +733,37 @@ Resources:
                 HOME: /root
                 RAILS_ENV: production
                 REDMINE_LANG: ja
-        install_httpd:
-          packages:
-            yum:
-              httpd : []
-              httpd-devel : []
+        configure_httpd:
           files:
+            /etc/httpd/conf.d/cache.conf:
+              content: !Sub |
+                <IfModule mod_cache.c>
+                    <IfModule mod_cache_disk.c>
+                        CacheEnable disk /
+                        CacheRoot /var/www/cache
+                        CacheIgnoreCacheControl On
+                        CacheIgnoreNoLastMod On
+                        CacheIgnoreHeaders Set-Cookie
+                    </IfModule>
+                </IfModule>
+              owner: root
+              group: root
+              mode: '000644'
+            /etc/httpd/conf.d/security.conf:
+              content: !Sub |
+                ServerTokens Prod
+                TraceEnable Off
+                Header always set x-content-type-options nosniff
+                Header always unset "X-Powered-By"
+                Header always append X-Frame-Options SAMEORIGIN
+                Header always set X-XSS-Protection "1; mode=block"
+                <Directory /var/www/html>
+                    AllowOverride All
+                    Options -Indexes
+                </Directory>
+              owner: apache
+              group: apache
+              mode: '000644'
             /etc/httpd/conf.d/redmine.conf:
               content: !Sub |
                 <Directory "/var/lib/redmine/public">
@@ -673,6 +773,8 @@ Resources:
                 Header always unset "X-Powered-By"
                 Header always unset "X-Runtime"
 
+                PassengerAppEnv ${PsgrAppEnv}
+                PassengerLogLevel ${PsgrLogLevel}
                 PassengerMaxPoolSize ${PsgrMaxPoolSize}
                 PassengerMaxInstancesPerApp ${PsgrMaxInstancesPerApp}
                 PassengerPoolIdleTime ${PsgrPoolIdleTime}
@@ -686,14 +788,32 @@ Resources:
               group: apache
               mode: '000644'
           commands:
-            01_configure_passenger:
+            01_modify_conf:
               command: !Sub |
-                ${RbenvRoot}/shims/passenger-install-apache2-module --auto | tee /tmp/passenger-install-apache2-module.log
+                \cp -f /dev/null /etc/httpd/conf.d/autoindex.conf
+                \cp -f /dev/null /etc/httpd/conf.d/welcome.conf
+                cp /etc/httpd/conf/httpd.conf /etc/httpd/conf/httpd.conf.origin
+                sed -i -e "s/AddDefaultCharset/#AddDefaultCharset/" /etc/httpd/conf/httpd.conf
+                sed -ie '/CustomLog.*combined/i \    SetEnvIf Request_URI "\\.(gif|jpg|png|js)$" no_log' /etc/httpd/conf/httpd.conf
+                sed -ie '/CustomLog.*combined/s/$/ env=!no_log/g' /etc/httpd/conf/httpd.conf
+            02_create_cache_dir:
+              command: mkdir /var/www/cache && chmod 777 /var/www/cache
+        install_passenger:
+          commands:
+            01_install_passenger:
+              command: !Sub |
+                ${RbenvRoot}/shims/gem install daemon_controller rack passenger --no-rdoc --no-ri
+                eval "$(${RbenvRoot}/bin/rbenv init -)"
+              env:
+                RBENV_ROOT: !Ref RbenvRoot
+            02_install_passenger_module:
+              command: !Sub |
+                ${RbenvRoot}/shims/passenger-install-apache2-module --auto
                 ${RbenvRoot}/shims/passenger-install-apache2-module --snippet >> /etc/httpd/conf.d/redmine.conf
-            02_create_symlink:
+            03_create_symlink:
               command: !Sub |
                 ln -s /var/lib/redmine/public /var/www/html/${RedminePrefix}
-            03_change_owner:
+            04_change_owner:
               command: !Sub |
                 chown -R apache:apache /var/lib/redmine
                 chown -R apache:apache /var/www/html/${RedminePrefix}
@@ -702,10 +822,7 @@ Resources:
               httpd:
                 enabled: 'true'
                 ensureRunning: 'true'
-        install_logs:
-          commands:
-            01_create_state_directory:
-              command: mkdir -p /var/awslogs/state
+        configure_awslogs:
           files:
             /etc/awslogs/awscli.conf:
               content: !Sub |
@@ -759,9 +876,9 @@ Resources:
               group: root
               mode: '000444'
               owner: root
-          packages:
-            yum:
-              awslogs: []
+          commands:
+            01_create_state_directory:
+              command: mkdir -p /var/awslogs/state
           services:
             sysvinit:
               awslogs:
@@ -770,50 +887,40 @@ Resources:
                 files:
                 - /etc/awslogs/awslogs.conf
     Properties:
-      IamInstanceProfile:
-        Ref: Ec2RoleInstanceProfile
+      IamInstanceProfile: !Ref Ec2RoleInstanceProfile
       ImageId:
         !FindInMap [AWSRegionArch2AMI, !Ref "AWS::Region", !FindInMap [AWSInstanceType2Arch, !Ref InstanceType, Arch]]
-      InstanceType:
-        Ref: InstanceType
-      KeyName:
-        Ref: KeyName
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      DisableApiTermination: true
       NetworkInterfaces:
       - AssociatePublicIpAddress: 'true'
         DeleteOnTermination: 'true'
         DeviceIndex: '0'
         GroupSet:
         - Ref: RedmineSecurityGroup
-        PrivateIpAddress:
-          Ref: PrivateIpAddress
-        SubnetId:
-          Ref: SubnetId
+        PrivateIpAddress: !Ref PrivateIpAddress
+        SubnetId: !Ref SubnetId
       Tags:
       - Key: Name
         Value: !Sub |
           ${AWS::StackName} - Redmine Server
       - Key: Application
-        Value:
-          Ref: AWS::StackId
+        Value: !Ref AWS::StackId
       UserData:
         "Fn::Base64":
           !Sub |
             #!/bin/bash -xe
             yum -y update
-            yum -y install curl-devel ImageMagick ImageMagick-devel ipa-gothic-fonts
+
+            # Install Development tools
+            yum -y groupinstall "Development tools"
+
+            # Change timezone
             ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime
 
             # Install s3cmd
             yum -y --enablerepo epel install s3cmd
-
-            # Install SSM Agent
-            mkdir /tmp/ssm
-            curl https://amazon-ssm-'${AWS::Region}'.s3.amazonaws.com/latest/linux_amd64/amazon-ssm-agent.rpm -o /tmp/ssm/amazon-ssm-agent.rpm
-            yum install -y /tmp/ssm/amazon-ssm-agent.rpm
-            status amazon-ssm-agent
-
-            # Install Development tools
-            yum -y groupinstall "Development tools"
 
             # Helper function
             function error_exit
@@ -825,24 +932,24 @@ Resources:
             # Install the files and packages from the metadata
             /opt/aws/bin/cfn-init -v -s ${AWS::StackName} -r RedmineServerInstance  --region ${AWS::Region} || error_exit 'Failed to run cfn-init'
 
+            # Install SSM Agent
+            start amazon-ssm-agent
+
             # Start up the cfn-hup daemon to listen for changes to the Web Server metadata
             /opt/aws/bin/cfn-hup || error_exit 'Failed to start cfn-hup'
 
             # Signal the status from cfn-init
             /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} -r RedmineServerInstance --region ${AWS::Region} '${WaitHandle}'
-    Type: AWS::EC2::Instance
   WaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
     DependsOn:
     - RedmineServerInstance
     Properties:
-      Handle:
-        Ref: WaitHandle
+      Handle: !Ref WaitHandle
       Timeout: '3000'
-    Type: AWS::CloudFormation::WaitCondition
   WaitHandle:
     Type: AWS::CloudFormation::WaitConditionHandle
 Outputs:
   RedmineServerInstanceId:
     Description: InstanceId of Redmine Server
-    Value:
-      Ref: RedmineServerInstance
+    Value: !Ref RedmineServerInstance
