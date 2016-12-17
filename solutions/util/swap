@@ -1,0 +1,58 @@
+#!/bin/bash
+#
+# chkconfig: 2345 20 20
+#
+### BEGIN INIT INFO
+# Provides: swap
+# Required-Start: $local_fs $network $remote_fs
+# Should-Start: $time
+# Required-Stop: $local_fs $network $remote_fs
+# Should-Stop:
+# Default-Start:
+# Default-Stop:
+# Short-Description: Adding swap space
+# Description: Create swap image on linux instance
+### END INIT INFO
+
+SWAPFILE=/mnt/swap.img
+
+# Source function library.
+. /etc/init.d/functions
+
+RETVAL=0
+
+start() {
+  MEMSIZE=`cat /proc/meminfo | grep MemTotal | awk '{print $2}'`
+  if [ $MEMSIZE -lt 2097152 ]; then
+    SIZE=$((MEMSIZE * 2))
+  elif [ $MEMSIZE -lt 8388608 ]; then
+    SIZE=$MEMSIZE
+  else
+    SIZE=4194304
+  fi
+
+  if cat /proc/swaps | grep $SWAPFILE ; then
+    exit $RETVAL
+  fi
+
+  fallocate -l "$SIZE"k $SWAPFILE && chmod 600 $SWAPFILE && mkswap $SWAPFILE && swapon $SWAPFILE
+}
+
+stop () {
+  if cat /proc/swaps | grep $SWAPFILE ; then
+    swapoff $SWAPFILE
+  fi
+}
+
+case "$1" in
+  start)
+      start
+      ;;
+  stop)
+      stop
+      ;;
+  *)
+      echo $"Usage: $0 {start|stop}"
+      RETVAL=1
+esac
+exit $RETVAL
