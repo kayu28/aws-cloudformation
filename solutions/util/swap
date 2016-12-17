@@ -31,7 +31,7 @@ start() {
     SIZE=4194304
   fi
 
-  if cat /proc/swaps | grep $SWAPFILE ; then
+  if cat /proc/swaps | grep -q $SWAPFILE ; then
     exit $RETVAL
   fi
 

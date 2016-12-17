@@ -517,32 +517,15 @@ Resources:
         make_swap:
           files:
             /etc/rc.d/init.d/swap:
-              content: !Sub |
-                SWAPFILE=/mnt/swap.img
-                MEMSIZE=`cat /proc/meminfo | grep MemTotal | awk '{print $2}'`
-                if [ $MEMSIZE -lt 2097152 ]; then
-                  SIZE=$((MEMSIZE * 2))
-                elif [ $MEMSIZE -lt 8388608 ]; then
-                  SIZE=$MEMSIZE
-                elif [ $MEMSIZE -lt 67108864 ]; then
-                  SIZE=$((MEMSIZE / 2))
-                else
-                  SIZE=4194304
-                fi
-                FSTYPE=`df -T |grep /$ | grep xfs | wc -l`
-                if [ $FSTYPE -eq 1 ]; then
-                    # For XFS
-                    dd if=/dev/zero of=$SWAPFILE count=$SIZE bs=1K && mkswap $SWAPFILE && swapon $SWAPFILE
-                elif [ $FSTYPE -eq 0 ]; then
-                    # For EXT4
-                    fallocate -l "$SIZE"k $SWAPFILE && chmod 600 $SWAPFILE&& mkswap $SWAPFILE && swapon $SWAPFILE
-                fi
+              source: https://raw.githubusercontent.com/kayu28/aws-cloudformation/master/solutions/util/swap
               owner: root
               group: root
               mode: '000755'
-          commands:
-            01_mkswap:
-              command: bash /etc/rc.d/init.d/swap
+          services:
+            sysvinit:
+              swap:
+                enabled: 'true'
+                ensureRunning: 'true'
         install_package:
           packages:
             yum:
