@@ -3,7 +3,7 @@ Metadata:
   License: Apache-2.0
 Description: >
     AWS CloudFormation Template gitbucket_within_tomcat_behind_apache:
-    This template installs GitBucket on a Amazon Linux 2016.09 instance.
+    This template installs GitBucket on a Amazon Linux 2017.03.1.20170623 instance.
 Parameters:
   KeyName:
     ConstraintDescription: must be the name of an existing EC2 KeyPair.
@@ -47,8 +47,6 @@ Parameters:
     - c4.2xlarge
     - c4.4xlarge
     - c4.8xlarge
-    - g2.2xlarge
-    - g2.8xlarge
     - r3.large
     - r3.xlarge
     - r3.2xlarge
@@ -111,7 +109,7 @@ Parameters:
     Description: Gitbucket version
     Type: String
     MinLength: '1'
-    Default: 4.7.1
+    Default: 4.12.1
   GitbucketHome:
     Type: String
     MinLength: '1'
@@ -209,10 +207,6 @@ Mappings:
       Arch: HVM64
     c4.8xlarge:
       Arch: HVM64
-    g2.2xlarge:
-      Arch: HVMG2
-    g2.8xlarge:
-      Arch: HVMG2
     r3.large:
       Arch: HVM64
     r3.xlarge:
@@ -249,49 +243,38 @@ Mappings:
       Arch: HVM64
   AWSRegionArch2AMI:
     ap-northeast-1:
-      HVM64: ami-1a15c77b
-      HVMG2: ami-78ba6619
-      PV64: ami-cf14c6ae
+      HVM64: ami-3bd3c45c
+      PV64: ami-d3d3c4b4
     ap-northeast-2:
-      HVM64: ami-a04297ce
-      HVMG2: NOT_SUPPORTED
-      PV64: NOT_SUPPORTED
-    ap-south-1:
-      HVM64: ami-cacbbea5
-      HVMG2: ami-f7354198
+      HVM64: ami-e21cc38c
       PV64: NOT_SUPPORTED
     ap-southeast-1:
-      HVM64: ami-7243e611
-      HVMG2: ami-56e84c35
-      PV64: ami-a743e6c4
+      HVM64: ami-77af2014
+      PV64: ami-42901f21
     ap-southeast-2:
-      HVM64: ami-55d4e436
-      HVMG2: ami-2589b946
-      PV64: ami-3ad6e659
+      HVM64: ami-10918173
+      PV64: ami-43918120
+    ap-south-1:
+      HVM64: ami-47205e28
+      PV64: NOT_SUPPORTED
     eu-central-1:
-      HVM64: ami-0044b96f
-      HVMG2: ami-d9d62ab6
-      PV64: ami-1345b87c
+      HVM64: ami-5b06d634
+      PV64: ami-4dbc1a22
     eu-west-1:
-      HVM64: ami-d41d58a7
-      HVMG2: ami-f0e0a483
-      PV64: ami-0e10557d
+      HVM64: ami-d7b9a2b1
+      PV64: ami-c4bba0a2
     sa-east-1:
-      HVM64: ami-b777e4db
-      HVMG2: NOT_SUPPORTED
-      PV64: ami-1d75e671
+      HVM64: ami-87dab1eb
+      PV64: ami-1cdab170
     us-east-1:
-      HVM64: ami-c481fad3
-      HVMG2: ami-50b4f047
-      PV64: ami-4d87fc5a
+      HVM64: ami-a4c7edb2
+      PV64: ami-abc1ebbd
     us-west-1:
-      HVM64: ami-de347abe
-      HVMG2: ami-699ad409
-      PV64: ami-df3779bf
+      HVM64: ami-327f5352
+      PV64: ami-347e5254
     us-west-2:
-      HVM64: ami-b04e92d0
-      HVMG2: ami-002bf460
-      PV64: ami-1d49957d
+      HVM64: ami-6df1e514
+      PV64: ami-98f3e7e1
 Resources:
   ProvisioningLogs:
     Type: AWS::Logs::LogGroup
@@ -385,7 +368,7 @@ Resources:
       Tags:
       - Key: Name
         Value: !Sub |
-          !Ref  "AWS::StackName" GitBucket Security Group
+          ${AWS::StackName} - GitBucket Security Group
   GitBucketServerInstance:
     Type: AWS::EC2::Instance
     Metadata:
@@ -444,7 +427,6 @@ Resources:
             yum:
               httpd24                  : []
               httpd24-devel            : []
-              mod24_security           : []
               java-1.8.0-openjdk-devel : []
               tomcat8                  : []
               tomcat8-admin-webapps    : []
@@ -469,20 +451,6 @@ Resources:
               owner: apache
               group: apache
               mode: '000644'
-            /etc/httpd/conf.d/cache.conf:
-              content: !Sub |
-                <IfModule mod_cache.c>
-                    <IfModule mod_cache_disk.c>
-                        CacheEnable disk /
-                        CacheRoot /var/www/cache
-                        CacheIgnoreCacheControl On
-                        CacheIgnoreNoLastMod On
-                        CacheIgnoreHeaders Set-Cookie
-                    </IfModule>
-                </IfModule>
-              owner: root
-              group: root
-              mode: '000644'
           commands:
             01_modify_conf:
               command: !Sub |
@@ -492,15 +460,6 @@ Resources:
                 sed -i -e "s/AddDefaultCharset/#AddDefaultCharset/" /etc/httpd/conf/httpd.conf
                 sed -ie '/CustomLog.*combined/i \    SetEnvIf Request_URI "\\.(gif|jpg|png|js)$" no_log' /etc/httpd/conf/httpd.conf
                 sed -ie '/CustomLog.*combined/s/$/ env=!no_log/g' /etc/httpd/conf/httpd.conf
-            02_download_modsecurity_crs:
-              command: !Sub |
-                git clone https://github.com/SpiderLabs/owasp-modsecurity-crs.git
-              cwd: /etc/httpd
-            03_include_crs:
-              command: !Sub |
-                cp /etc/httpd/owasp-modsecurity-crs/crs-setup.conf.example /etc/httpd/modsecurity.d/activated_rules/crs-setup.conf
-            04_create_cache_dir:
-              command: mkdir /var/www/cache && chmod 777 /var/www/cache
           services:
             sysvinit:
               httpd:
@@ -532,7 +491,7 @@ Resources:
                         password="${TomcatAdminPassword}"
                         roles="admin-gui,admin-script,manager-gui,manager-status,manager-script" />
                 </tomcat-users>
-              owner: tomcat
+              owner: root
               group: tomcat
               mode: '000644'
             /etc/tomcat8/logging.properties:
@@ -561,7 +520,7 @@ Resources:
                 org.apache.catalina.core.ContainerBase.[Catalina].[localhost].[/manager].handlers = 3manager.java.util.logging.FileHandler
                 org.apache.catalina.core.ContainerBase.[Catalina].[localhost].[/host-manager].level = INFO
                 org.apache.catalina.core.ContainerBase.[Catalina].[localhost].[/host-manager].handlers = 4host-manager.java.util.logging.FileHandler
-              owner: tomcat
+              owner: root
               group: tomcat
               mode: '000644'
           commands:
@@ -587,9 +546,10 @@ Resources:
               content: !Sub |
                 <Location /gitbucket>
                     ProxyPass ajp://localhost:8009/gitbucket
+                    ProxyPassReverse ajp://localhost:8009/gitbucket
                 </Location>
-              owner: apache
-              group: apache
+              owner: root
+              group: root
               mode: '000644'
           commands:
             01_set_catalina_opts:
@@ -775,7 +735,7 @@ Resources:
       Tags:
       - Key: Name
         Value: !Sub |
-          ${AWS::StackName} - Redmine Server
+          ${AWS::StackName} - GitBucket Server
       - Key: Application
         Value:
           Ref: AWS::StackId
@@ -817,5 +777,5 @@ Resources:
     Type: AWS::CloudFormation::WaitConditionHandle
 Outputs:
   GitBucketServerInstanceId:
-    Description: InstanceId of Redmine Server
+    Description: InstanceId of GitBucket Server
     Value: !Ref GitBucketServerInstance
